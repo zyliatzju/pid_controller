@@ -1,0 +1,1 @@
+DynObstacle[] dyn_obstacles
