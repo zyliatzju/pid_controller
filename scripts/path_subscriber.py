@@ -33,17 +33,21 @@ class PathSubscriber():
 		self.odom = msg.pose 
 
 	def wp_publisher(self):
-		r = rospy.Rate(10)
 		if len(self.path.poses) > 0:
-			t_min_pose = self.path.poses.pop(0)
-			t_min = Twist()
-			t_min.linear.x = t_min_pose.pose.position.x
-			t_min.linear.y = t_min_pose.pose.position.y
-			t_min.angular.z = self.get_euler_yaw(t_min_pose.pose.orientation)
-			print "Goal: x: %.2f y: %.2f yaw: %.2f" %(t_min.linear.x,t_min.linear.y,t_min.angular.z)
+			pose = self.path.poses.pop(0)
+			if len(self.path.poses) > 0:
+				pose = self.path.poses.pop(0)
+			wp = Twist()
+			wp.linear.x = pose.pose.position.x
+			wp.linear.y = pose.pose.position.y
+			if len(self.path.poses) > 0:
+				wp.angular.z = self.get_euler_yaw(self.path.poses[-1].pose.orientation)
+			else:
+				wp.angular.z = self.get_euler_yaw(pose.pose.orientation)
+			print "Goal: x: %.2f y: %.2f yaw: %.2f" %(wp.linear.x,wp.linear.y,wp.angular.z)
 
 
-			self.wp_pub.publish(t_min)
+			self.wp_pub.publish(wp)
 
 	def wp_publisher_cb(self, msg):
 		if msg.data:
@@ -53,26 +57,6 @@ class PathSubscriber():
 	def get_euler_yaw(self, orientation):
 		euler = euler_from_quaternion([orientation.x,orientation.y,orientation.z,orientation.w])
 		return euler[2]
-
-	def get_error(self, goal_twist, curr_pose):
-		state = np.array([curr_pose.position.x, curr_pose.position.y, self.get_euler_yaw(curr_pose.orientation)])
-		goal_position = np.array([goal_twist.linear.x, goal_twist.linear.y, goal_twist.angular.z])
-		diffArr = goal_position - state
-		dist_err = math.sqrt(diffArr[0]*diffArr[0] + diffArr[1]*diffArr[1])
-		yaw_err = abs(diffArr[2])
-		yaw_err %= (2*3.14159)
-		if yaw_err > 3.14159:
-			yaw_err -= 2*3.14159
-		return dist_err, yaw_err
-
-	def go_to(self, goal_twist):
-		dist_err, yaw_err = self.get_error(goal_twist,self.odom)
-
-		r = rospy.Rate(10)
-		while (dist_err > .1) and yaw_err > np.deg2rad(2.5) and not rospy.is_shutdown():
-			self.wp_pub.publish(goal_twist)
-			dist_err, yaw_err = self.get_error(goal_twist,self.odom)
-			r.sleep()
 
 if __name__ == '__main__':
 	rospy.init_node('path_subscriber')

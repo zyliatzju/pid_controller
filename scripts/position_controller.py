@@ -9,6 +9,9 @@ from geometry_msgs.msg import PoseStamped
 from roborts_msgs.msg import TwistAccel
 from std_msgs.msg import Bool
 from geometry_msgs.msg import Vector3
+
+from tf.transformations import euler_from_quaternion
+
 class Position_Controller:
 	def __init__(self):
 		print('Intialize')
@@ -16,6 +19,7 @@ class Position_Controller:
 		self.flag = 0
 		self.state = Twist()
 		self.last_state = Twist()
+		self.goal_position = Twist()
 		#Set the publish and the subsriber
 		self.publish_command = rospy.Publisher('/cmd_vel_acc',TwistAccel,queue_size=1)
 		self.publish_goal_reached = rospy.Publisher('/goal_position_cb', Bool)
@@ -26,24 +30,19 @@ class Position_Controller:
 		rospy.Subscriber('/tuning_pid_z',Vector3,self.update_param_z)
 		# Topic goal position needed from path planning
 		
-#		g.linear.x = self.init_goal[0]
-#		g.linear.y = self.init_goal[1]
-#		g.angular.z = self.init_goal[2]
-		self.goal_position = Twist()
-
 		stop = TwistAccel()
 		stop.twist.linear.x = 0
 		stop.twist.linear.y = 0
 		stop.twist.angular.z = 0
 		self.stop_cmd = stop
 
-		self.Kp_x = 1
+		self.Kp_x = 1.
 		self.Ki_x = 0.
-		self.Kd_x = .5
-		self.Kp_y = 1
+		self.Kd_x = .8
+		self.Kp_y = 1.
 		self.Ki_y = 0.
-		self.Kd_y = .5
-		self.Kp_yaw = .8
+		self.Kd_y = .8
+		self.Kp_yaw = .5
 		self.Ki_yaw = 0.
 		self.Kd_yaw = .2
 
@@ -70,14 +69,16 @@ class Position_Controller:
 		self.goal_position = wp
 		self.flag = 1
 
+	def quat_to_eul(self, orientation):
+		return euler_from_quaternion((orientation.x, orientation.y, orientation.z, orientation.w))[2]
+
 	def update_state(self, state_odom):
 		#Make sure there is an inital state first. 
-		if self.flag == 0:
-			self.func_init_goal()
-		self.state = Twist()
 		self.state.linear.x = state_odom.pose.position.x
 		self.state.linear.y = state_odom.pose.position.y
-		self.state.angular.z = np.arctan2(2*(state_odom.pose.orientation.z*state_odom.pose.orientation.w),1-2*(state_odom.pose.orientation.w**2))
+		self.state.angular.z = self.quat_to_eul(state_odom.pose.orientation)
+		if self.flag == 0:
+			self.func_init_goal()
 		self.run_position_controller()
 		print('Update State', self.state.linear.x,  self.state.linear.y, self.state.angular.z)
 	
@@ -85,7 +86,8 @@ class Position_Controller:
 		pos = self.state
 		self.goal_position.linear.x = pos.linear.x 
 		self.goal_position.linear.y = pos.linear.y
-		self.goal_position.angular.z = pos.angular.z - 5.8
+		self.goal_position.angular.z = pos.angular.z
+		self.flag = 1
 
 	def check_reached(self):
 		threshhold_xy = .01 #Meters
@@ -103,13 +105,13 @@ class Position_Controller:
 
 		goal = self.goal_position #twist
 		curr_pos = self.state #Twist as well
-		x, y, yaw = curr_pos.linear.x, curr_pos.linear.y, -curr_pos.angular.z
+		x, y, yaw = curr_pos.linear.x, curr_pos.linear.y, curr_pos.angular.z
 		if self.prev:
-			dx, dy, dyaw = x - self.prev.linear.x, y - self.prev.linear.y, yaw + self.prev.angular.z
+			dx, dy, dyaw = x - self.prev.linear.x, y - self.prev.linear.y, yaw - self.prev.angular.z
 			dx, dy = dx * np.cos(yaw) + dy * np.sin(yaw), dx * np.sin(yaw) + dy * np.cos(yaw)
 		else:
 			dx, dy, dyaw = 0, 0, 0
-		goal_x, goal_y, goal_yaw = goal.linear.x, goal.linear.y, -goal.angular.z
+		goal_x, goal_y, goal_yaw = goal.linear.x, goal.linear.y, goal.angular.z
 
 		tf_mat = np.array([[np.cos(yaw),-np.sin(yaw),x], \
 			               [np.sin(yaw),np.cos(yaw),y],  \
@@ -126,7 +128,7 @@ class Position_Controller:
 		# Calculate state error (HINT!! Rotate the errors into body frame)
 		error = np.dot(np.linalg.inv(tf_mat),goal)
 
-		errorx,errory= -error[:2,2]
+		errorx,errory= error[:2,2]
 		
 		# errorx,errory,erroryaw = goal.linear.x - curr_pos.linear.x , goal.linear.y - curr_pos.linear.y, goal.angular.z - curr_pos.angular.z
 		# erroryaw = -errroryaw
@@ -154,7 +156,6 @@ class Position_Controller:
 
 		cmd_x = self.Kp_x*errorx + -self.Kd_x*dx
 		cmd_y = self.Kp_y*errory + -self.Kd_y*dy
-		# cmd_yaw = self.Kp_yaw*erroryaw
 		cmd_yaw = self.Kp_yaw*erroryaw + -self.Kd_yaw*dyaw
 
 
@@ -179,9 +180,10 @@ class Position_Controller:
 		cmd_out.twist.linear.x = cmd_x
 		cmd_out.twist.linear.y = cmd_y
 		cmd_out.twist.angular.z = cmd_yaw
-		print("current state", curr_pos.linear.x, curr_pos.linear.y, curr_pos.angular.z)
+		print("Command", cmd_x, cmd_y, cmd_yaw)
 		self.prev = self.state
 		self.publish_command.publish(cmd_out)
+		# self.publish_command.publish(self.stop_cmd)
 
 
 if __name__ == '__main__':
